@@ -56,6 +56,12 @@ PAGE 1 : /* Data Memory */
 
    RAMLS5      : origin = 0x00A800, length = 0x000800
 
+   ADCA_RESULT : origin = 0x000B00, length = 0x000020
+   PIE_CTRL    : origin = 0x000CE0, length = 0x000020
+   PIE_VECT    : origin = 0x000D00, length = 0x000200
+   EPWM1	   : origin = 0x004000, length = 0x000100
+   ADCA        : origin = 0x007400, length = 0x000080
+
    RAMGS0      : origin = 0x00C000, length = 0x001000
    RAMGS1      : origin = 0x00D000, length = 0x001000
    RAMGS2      : origin = 0x00E000, length = 0x001000
@@ -70,7 +76,8 @@ PAGE 1 : /* Data Memory */
    RAMGS11     : origin = 0x017000, length = 0x001000
    RAMGS12     : origin = 0x018000, length = 0x001000
    RAMGS13     : origin = 0x019000, length = 0x001000
-   
+
+   CPU_SYS     : origin = 0x05D300, length = 0x000100
 }
 
 
@@ -81,6 +88,28 @@ SECTIONS
    .pinit              : > FLASHB,     PAGE = 0, ALIGN(4)
    .text               : >> FLASHB | FLASHC | FLASHD | FLASHE      PAGE = 0, ALIGN(4)
    codestart           : > BEGIN       PAGE = 0, ALIGN(4)
+
+   AdcaResultFile       : > ADCA_RESULT,  	PAGE = 1
+   AdcaRegsFile         : > ADCA,         	PAGE = 1
+   EPwm1RegsFile        : > EPWM1,        	PAGE = 1
+   CpuSysRegsFile       : > CPU_SYS,     	PAGE = 1
+   PieCtrlRegsFile      : > PIE_CTRL,     	PAGE = 1
+   RFFTdata1        	: > RAMGS0,     	PAGE = 1, ALIGN(1024)
+   RFFTdata2        	: > RAMGS1,     	PAGE = 1
+   RFFTdata3        	: > RAMGS2, 	    PAGE = 1
+   RFFTdata4        	: > RAMGS3,	     	PAGE = 1
+
+   UNION run = PIE_VECT, PAGE = 1
+   {
+      PieVectTableFile    : TYPE=DSECT
+      GROUP
+      {
+         EmuKeyVar        : TYPE=DSECT
+         EmuBModeVar      : TYPE=DSECT
+         FlashCallbackVar : TYPE=DSECT
+         FlashScalingVar  : TYPE=DSECT
+      }
+   }
 
 #ifdef __TI_COMPILER_VERSION__
    #if __TI_COMPILER_VERSION__ >= 15009000

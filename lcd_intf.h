@@ -40,7 +40,7 @@
 void lcd_setup();
 void lcd_write(bool regSelect, uint16_t LCD_data);
 void lcd_db_write( uint16_t LCD_data );
-void lcd_print( char* text, uint16_t length );
+void lcd_print( char* text );
 void lcd_clear();
 void pin_write( uint16_t port, bool val );
 

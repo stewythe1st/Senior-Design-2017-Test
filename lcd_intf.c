@@ -13,7 +13,7 @@
 /***********************************************************
 * Headers
 ************************************************************/
-#include "lcd.h"
+#include "lcd_intf.h"
 
 /***********************************************************
 * LCD Setup
@@ -67,7 +67,9 @@ void lcd_setup() {
 * LCD Clear
 ************************************************************/
 void lcd_clear() {
+    volatile uint32_t j;
     lcd_write( 0, 0x01 );
+    for(j=10000; j>0; j--);
 }
 
 
@@ -102,12 +104,15 @@ void lcd_db_write( uint16_t LCD_data ) {
 /***********************************************************
 * LCD High-Level Print
 ************************************************************/
-void lcd_print( char* text, uint16_t length ) {
-    volatile uint32_t i,j;
-    for( i = 0; i < length; i++ ) {
+void lcd_print( char* text )
+    {
+    volatile uint32_t i = 0;
+    while(text[i] != '\0')
+        {
         lcd_write( 1, text[ i ] );
+        i++;
+        }
     }
-}
 
 
 /***********************************************************

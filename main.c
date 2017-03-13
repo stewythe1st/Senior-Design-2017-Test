@@ -30,10 +30,13 @@
 ************************************************************/
 #include "driverlib.h"
 #include "device.h"
-#include "lcd.h"
 #include "math.h"
 #include "float.h"
 #include "FPU.h"
+
+#include "adc_intf.h"
+#include "lcd_intf.h"
+#include "pie_intf.h"
 
 
 /***********************************************************
@@ -42,6 +45,7 @@
 #define RFFT_STAGES     ( 9 )
 #define RFFT_SIZE       ( 1 << RFFT_STAGES ) // 512
 #define PI              ( 3.14159 )
+#define RESULTS_BUF_SZ  ( RFFT_SIZE )
 
 
 /***********************************************************
@@ -60,12 +64,38 @@ float32 RFFTmagBuff[ RFFT_SIZE / 2 + 1 ];           // Additional Buffer used in
 #pragma DATA_SECTION( RFFTF32Coef, "RFFTdata4" );
 float32 RFFTF32Coef[ RFFT_SIZE ];                   // Twiddle buffer
 
+#pragma DATA_SECTION(AdcaRegs,"AdcaRegsFile");
+volatile struct ADC_REGS AdcaRegs;                  // ADC A registers
+
+#pragma DATA_SECTION(AdcaResultRegs,"AdcaResultFile");
+volatile struct ADC_RESULT_REGS AdcaResultRegs;     // ADC A results register
+
+#pragma DATA_SECTION(EPwm1Regs,"EPwm1RegsFile");
+volatile struct EPWM_REGS EPwm1Regs;                // ePWM register
+
+#pragma DATA_SECTION(CpuSysRegs,"CpuSysRegsFile");
+volatile struct CPU_SYS_REGS CpuSysRegs;
+
+#pragma DATA_SECTION(PieVectTable,"PieVectTableFile");
+volatile struct PIE_VECT_TABLE PieVectTable;
+
+#pragma DATA_SECTION(PieCtrlRegs,"PieCtrlRegsFile");
+volatile struct PIE_CTRL_REGS PieCtrlRegs;
+
 
 /***********************************************************
 * Global Variables
 ************************************************************/
 RFFT_F32_STRUCT rfft;
-const char * const noteStr[12] = { "G#", "A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G" };
+const char * const noteStr[12]  = { "G#", "A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G" };
+char printstr[10];
+float32 buf_a[ RESULTS_BUF_SZ ];
+float32 buf_b[ RESULTS_BUF_SZ ];
+volatile Uint16 bufferFull               = 0;
+Uint16 buf_idx                  = 0;
+float32* samp_buf                = buf_a;
+float32* conv_buf                = buf_b;
+float freq;
 
 
 /***********************************************************
@@ -73,41 +103,103 @@ const char * const noteStr[12] = { "G#", "A", "A#", "B", "C", "C#", "D", "D#", "
 ************************************************************/
 int main( void )
     {
-	
-    // Declarations
-    Uint16  i;  // counter var
-
     // Initializes system control, device clock, and peripherals
     Device_init();
 
+    // Step 3. Clear all interrupts and initialize PIE vector table:
+    // Disable CPU interrupts
+    DINT;
+
+    InitPieCtrl();
+
+    IER = 0x0000;
+    IFR = 0x0000;
+
+    InitPieVectTable();
+
     // Initializes PIE and clear PIE registers. Disables CPU interrupts and clears all CPU interrupt flags
-    Interrupt_initModule();
+    //Interrupt_initModule();
 
     // Initialize the PIE vector table with pointers to the shell interrupt service routines (ISR)
-    Interrupt_initVectorTable();
+    //Interrupt_initVectorTable();
 
     // Init LCD Module
     lcd_setup();
 
     // Test LCD Module
-    lcd_print( "Hello world!", 12 );
+    lcd_print( "Hello world!" );
 
     // Test GPIO pins
     GPIO_setDirectionMode( 92, GPIO_DIR_MODE_OUT );
     GPIO_writePin( 92, 1 );
 
+
+    init_fft();
+
+    // Map ISR function
+    EALLOW;
+    PieVectTable.ADCA1_INT = &adca1_isr; //function for ADCA interrupt 1
+    EDIS;
+
+    // Init ADC Modules
+    ConfigureADC();
+    ConfigureEPWM();
+    SetupADCEpwm(0);
+
+    // Enable global Interrupts and higher priority real-time debug events:
+    IER |= 0x0001; //Enable group 1 interrupts
+    EINT;  // Enable Global interrupt INTM
+    ERTM;  // Enable Global realtime interrupt DBGM
+
+    // enable PIE interrupt
+    PieCtrlRegs.PIEIER1.bit.INTx1 = 1;
+
+    // sync ePWM
+    EALLOW;
+    CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 1;
+
+    for(;;)
+        {
+
+        // Start ePWM
+        EPwm1Regs.ETSEL.bit.SOCAEN = 1;  // enable SOCA
+        EPwm1Regs.TBCTL.bit.CTRMODE = 0; // unfreeze, and enter up count mode
+
+        freq = calc_fft();
+
+        // Frequency to scale degree conversion
+        // https://en.wikipedia.org/wiki/Piano_key_frequencies
+        Uint16 note = round( 12 * log2( freq / 440 ) + 49 );
+        lcd_clear();
+        //lcd_print( (char * )( noteStr[ note % 12 ] ), 2 );
+        itoa( (Uint16)freq, printstr, 10 );
+        lcd_print( printstr );
+
+        while( bufferFull != 1 ){;}
+        bufferFull = 0;
+
+        // Stop ePWM
+        EPwm1Regs.ETSEL.bit.SOCAEN = 0;  // disable SOCA
+        EPwm1Regs.TBCTL.bit.CTRMODE = 3; // freeze counter
+
+        // Software breakpoint
+        //asm("   ESTOP0");
+        }
+    }
+
+
+/***********************************************************
+* Initialize FFT
+************************************************************/
+void init_fft()
+    {
+    // Declarations
+    Uint16  i;
+
     // Clear input buffers:
     for( i = 0; i < RFFT_SIZE; i++ )
         {
         RFFTin1Buff[i] = 0.0f;
-        }
-
-    // Generate test waveform
-    float f = 40;
-    float fs = 10000;
-    for( i = 0; i < RFFT_SIZE; i++ )
-        {
-        RFFTin1Buff[ i ] = sin( i * PI * f / fs );
         }
 
     rfft.FFTSize   = RFFT_SIZE;
@@ -119,11 +211,22 @@ int main( void )
 
     // Calculate twiddle factor
     RFFT_f32_sincostable( &rfft );
+    }
 
-    // Clean up output buffer
+/***********************************************************
+* Calculate FFT
+************************************************************/
+Uint16 calc_fft()
+    {
+    // Declarations
+    Uint16  i;
+    Uint32  fo;
+
+    // Clean up buffers
     for( i = 0; i < RFFT_SIZE; i++ )
         {
-        RFFToutBuff[i] = 0;
+        RFFToutBuff[ i ] = 0;
+        RFFTin1Buff[ i ] = conv_buf[ i ];
         }
 
     // Clean up magnitude buffer
@@ -133,14 +236,15 @@ int main( void )
         }
 
     // Calculate real FFT
+    rfft.InBuf = conv_buf;
     RFFT_f32( &rfft );
 
     // Calculate magnitude
     RFFT_f32_mag( &rfft );
 
     // Find peak
-    Uint16 max = 0;
-    for( i = 0; i < RFFT_SIZE / 2; i++ )
+    Uint16 max = 1;
+    for( i = max; i < RFFT_SIZE / 2; i++ )
         {
         if( RFFTmagBuff[ i ] > RFFTmagBuff[ max ] )
             {
@@ -149,16 +253,63 @@ int main( void )
         }
 
     // Get output frequency
-    float fo = fs * max / ( RFFT_SIZE / 2);
+    fo = (Uint32)SAMP_FREQ * max / ( RFFT_SIZE / 2);
 
-    // Frequency to scale degree conversion
-    // https://en.wikipedia.org/wiki/Piano_key_frequencies
-    Uint16 note = round( 12 * log2( fo / 440 ) + 49 );
+    return fo;
+    }
 
-    lcd_clear();
-    lcd_print( noteStr[ note % 12 ], 2 );
 
-    // Just sit and loop forever when done
-    for(;;);
+/***********************************************************
+* ADC1 Interrupt Service Routine
+************************************************************/
+interrupt void adca1_isr(void)
+    {
+    //samp_buf[ buf_idx ] = ( float32 )AdcaResultRegs.ADCRESULT0;
+    samp_buf[ buf_idx ] = sin( buf_idx * PI * 740 / SAMP_FREQ );
+    buf_idx++;
+    if( buf_idx >= RESULTS_BUF_SZ )
+        {
+        buf_idx     = 0;
+        bufferFull  = 1;
+        if( samp_buf == buf_a )
+            {
+            samp_buf = buf_b;
+            conv_buf = buf_a;
+            }
+        else
+            {
+            samp_buf = buf_a;
+            conv_buf = buf_b;
+            }
+        }
+    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //clear INT1 flag
+    PieCtrlRegs.PIEACK.all = 0x0001;
+    }
+
+/***********************************************************
+* ITOA
+************************************************************/
+void itoa(long unsigned int value, char* result, int base)
+    {
+      // check that the base if valid
+      if (base < 2 || base > 36) { *result = '\0';}
+
+      char* ptr = result, *ptr1 = result, tmp_char;
+      int tmp_value;
+
+      do {
+        tmp_value = value;
+        value /= base;
+        *ptr++ = "zyxwvutsrqponmlkjihgfedcba9876543210123456789abcdefghijklmnopqrstuvwxyz" [35 + (tmp_value - value * base)];
+      } while ( value );
+
+      // Apply negative sign
+      if (tmp_value < 0) *ptr++ = '-';
+      *ptr-- = '\0';
+      while(ptr1 < ptr) {
+        tmp_char = *ptr;
+        *ptr--= *ptr1;
+        *ptr1++ = tmp_char;
+      }
 
     }
