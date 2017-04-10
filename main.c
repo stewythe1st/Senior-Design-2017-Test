@@ -95,7 +95,7 @@ volatile Uint16 bufferFull               = 0;
 Uint16 buf_idx                  = 0;
 float32* samp_buf                = buf_a;
 float32* conv_buf                = buf_b;
-float freq;
+float freq, freq2;
 
 
 /***********************************************************
@@ -123,16 +123,14 @@ int main( void )
     // Initialize the PIE vector table with pointers to the shell interrupt service routines (ISR)
     //Interrupt_initVectorTable();
 
+    // Init GPIO
+    GPIO_setDirectionMode( 92, GPIO_DIR_MODE_OUT );
+
     // Init LCD Module
     lcd_setup();
 
     // Test LCD Module
     lcd_print( "Hello world!" );
-
-    // Test GPIO pins
-    GPIO_setDirectionMode( 92, GPIO_DIR_MODE_OUT );
-    GPIO_writePin( 92, 1 );
-
 
     init_fft();
 
@@ -158,32 +156,43 @@ int main( void )
     EALLOW;
     CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 1;
 
+    // Start ePWM
+    EPwm1Regs.ETSEL.bit.SOCAEN = 1;  // enable SOCA
+    EPwm1Regs.TBCTL.bit.CTRMODE = 0; // unfreeze, and enter up count mode
+
+    freq = 0;
+    freq2 = -1;
     for(;;)
         {
 
-        // Start ePWM
-        EPwm1Regs.ETSEL.bit.SOCAEN = 1;  // enable SOCA
-        EPwm1Regs.TBCTL.bit.CTRMODE = 0; // unfreeze, and enter up count mode
-
+        // Calculate frequency
         freq = calc_fft();
 
-        // Frequency to scale degree conversion
+        // Convert frequency to scale degree
         // https://en.wikipedia.org/wiki/Piano_key_frequencies
         Uint16 note = round( 12 * log2( freq / 440 ) + 49 );
-        lcd_clear();
-        //lcd_print( (char * )( noteStr[ note % 12 ] ), 2 );
-        itoa( (Uint16)freq, printstr, 10 );
-        lcd_print( printstr );
 
+        // Update LCD display
+        if( freq2 != freq )
+            {
+            lcd_clear();
+            if( freq < 50 ) // any frequency below 50Hz is probably just no signal
+                {
+                lcd_print( "No signal!" );
+                }
+            else
+                {
+                itoa( (Uint16)freq, printstr, 10 );
+                lcd_print( printstr );
+                //lcd_print( (char * )( noteStr[ note % 12 ] ), 2 );
+                }
+            }
+
+        // Wait for ADC ISR to fill buffer
         while( bufferFull != 1 ){;}
         bufferFull = 0;
+        freq2 = freq;
 
-        // Stop ePWM
-        EPwm1Regs.ETSEL.bit.SOCAEN = 0;  // disable SOCA
-        EPwm1Regs.TBCTL.bit.CTRMODE = 3; // freeze counter
-
-        // Software breakpoint
-        //asm("   ESTOP0");
         }
     }
 
@@ -221,12 +230,23 @@ Uint16 calc_fft()
     // Declarations
     Uint16  i;
     Uint32  fo;
+    Uint16 zero_cnt = 0;
 
     // Clean up buffers
     for( i = 0; i < RFFT_SIZE; i++ )
         {
         RFFToutBuff[ i ] = 0;
         RFFTin1Buff[ i ] = conv_buf[ i ];
+        if( conv_buf[ i ] == 0)
+            {
+            zero_cnt++;
+            }
+        }
+
+    // If we receive more than 3/4 zeros, its probably just no signal
+    if(zero_cnt > ( 3 * RFFT_SIZE / 4 ) )
+        {
+        return 0;
         }
 
     // Clean up magnitude buffer
@@ -244,7 +264,7 @@ Uint16 calc_fft()
 
     // Find peak
     Uint16 max = 1;
-    for( i = max; i < RFFT_SIZE / 2; i++ )
+    for( i = max; i < ( ( RFFT_SIZE / 2 ) - 1); i++ )
         {
         if( RFFTmagBuff[ i ] > RFFTmagBuff[ max ] )
             {
@@ -262,15 +282,27 @@ Uint16 calc_fft()
 /***********************************************************
 * ADC1 Interrupt Service Routine
 ************************************************************/
+Uint16 toggle = 0;
 interrupt void adca1_isr(void)
     {
-    //samp_buf[ buf_idx ] = ( float32 )AdcaResultRegs.ADCRESULT0;
-    samp_buf[ buf_idx ] = sin( buf_idx * PI * 740 / SAMP_FREQ );
+    // Toggle GPIO pin to verify interrupt frequency
+    toggle++;
+    if(toggle % 2 == 0)
+        GPIO_writePin( 92, 1 );
+    else
+        GPIO_writePin( 92, 0 );
+
+    // Get input from ADC
+    samp_buf[ buf_idx ] = ( float32 )AdcaResultRegs.ADCRESULT0;
+    //samp_buf[ buf_idx ] = sin( buf_idx * PI * 440 / SAMP_FREQ );
+
+    // Did we fill the buffer yet?
     buf_idx++;
     if( buf_idx >= RESULTS_BUF_SZ )
         {
         buf_idx     = 0;
         bufferFull  = 1;
+        // Swap buffers for conversion
         if( samp_buf == buf_a )
             {
             samp_buf = buf_b;
@@ -282,7 +314,9 @@ interrupt void adca1_isr(void)
             conv_buf = buf_b;
             }
         }
-    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //clear INT1 flag
+
+    // Clear interrupt flag
+    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
     PieCtrlRegs.PIEACK.all = 0x0001;
     }
 

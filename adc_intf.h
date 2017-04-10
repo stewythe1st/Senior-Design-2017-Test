@@ -24,8 +24,8 @@
 * Compiler Constants
 ************************************************************/
 // Interrupt frequency (for sampling)
-#define SAMP_FREQ ( 10000 )     // 10kHz
-#define EPWM_CNTS ( SYSCLK / SAMP_FREQ / 4 )
+#define SAMP_FREQ ( 3100 )
+#define EPWM_CNTS ( SYSCLK / SAMP_FREQ / 160 )
 
 // Definitions for specifying an ADC
 #define ADC_ADCA 0

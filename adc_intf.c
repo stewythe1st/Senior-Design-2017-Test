@@ -100,8 +100,8 @@ void ConfigureEPWM(void)
     EPwm1Regs.ETSEL.bit.SOCAEN = 0;         // disable SOC on A group
     EPwm1Regs.ETSEL.bit.SOCASEL = 4;        // select SOC on up-count
     EPwm1Regs.ETPS.bit.SOCAPRD = 1;         // generate pulse on 1st event
-    EPwm1Regs.CMPA.bit.CMPA = 0x0800;       // set compare A value to 2048 counts
-    EPwm1Regs.TBPRD = EPWM_CNTS;            // set period (configure in adc_intf.h)
+    EPwm1Regs.CMPA.bit.CMPA = 100;//62;// set compare A value to 4096 counts
+    EPwm1Regs.TBPRD = 200;//124;            // set period (configure in adc_intf.h)
     EPwm1Regs.TBCTL.bit.CTRMODE = 3;        // freeze counter
     EDIS;                                   // disallow writing to protected registers
 }
